@@ -1,0 +1,1164 @@
+---
+title: "Coral Colony Matrix Population Model"
+author: "Coral Demography Working Group"
+date: "March 13, 2020"
+output: html_document
+---
+
+## Objective
+
+We model the population growth dynamics of a reef-building coral using a matrix population model (MPM) that describes state transitions between individuals among size. The goal of our model is to understand the different demographic processes that could result in a shift (reduction) in mean individual size.
+
+We study five processes: 
+(1) An overall increase in mortality regardless of individual size (the 'traditional' hypothesis);
+(2) Size-dependent mortality (with higher mortality for larger individuals);
+(3) Increased partial mortality;
+(4) Reduced growth; and
+(5) Transient increases in small individuals driven by a high-recruitment year.
+
+Our goal is to predict the short- and long-term changes in size distributions of corals under these different regimes, and identify (if possible) any qualitative differences in these size distributions that may be informative for coral reef ecologists surveying size distributions at their field sites.
+
+## Model Description
+
+Matrix population models represent the present population as a vector $\vec{x_t}$ whose entries describe the number of individuals at each of $n$ classes. Here, we model corals using a combination of age and size structure, allowing us to track the age-dependent processes of settlement and recruitment, as well as the growth processes of recruited corals. In particular, we model one larval class $L$ representing sexually produced propagules that have not yet recruited to a reef; one new recruit class $R$ representing settlers to the reef; and a series of juvenile $J_i$ classes of increasing size representing corals that have not yet reached sexual maturity, and a series of adult classes $A_i$ representing sexually mature corals of increasing size. For juveniles and adults, we model size as radius in centimeters. This allows us to more closely approximate growth-based transitions because growth is typically measured in linear (radial) extension, while also being able to easily convert between radius and planar area by assuming that coral individuals are approximately spherical. 
+
+We use a projection matrix **A** to simulate state transitions over time:
+
+$$
+\vec{x_{t+1}} = \mathrm{\textbf{A}} \cdot \vec{x_t}.
+$$
+
+The projection matrix **A** is the composite of matrices representing the production of new individuals (fecundity, **F**) and state transitions among existing individuals. The latter is traditionally represented as the product of the growth matrix **G** and the diagonal survival matrix **S**. However, in corals, state transitions are complicated by the possibility that individuals not only increase in size but may also shrink due to partial mortality. We represent the probability of partial mortality with the diagonal matrix **M** and use two matrices **G** and **P** to represent the probabilities of state transitions to larger (via growth) and smaller (via partial mortality) size classes:
+
+$$
+\mathrm{\textbf{A}} = \mathrm{\textbf{F}} + \left[ \mathrm{\textbf{G}}\left(\mathrm{\textbf{I}}-\mathrm{\textbf{M}}\right) + \mathrm{\textbf{P}}\mathrm{\textbf{M}}\right]\mathrm{\textbf{S}}.
+$$
+We use generalized functions grounded in observational data to represent reproduction and size transitions as described below. 
+
+#### Reproduction
+There are two important steps to coral sexual reproduction which we consider in our model. First, new propagules (here, termed larvae) are produced through sexual reproduction by adult corals in classes $A_i$. We account for the observation that larger corals produce more larvae **[CITATIONS]** by modeling fecundity $f_a$ as a linear function of coral size, where $p$ is the increase in propagule production with increasing coral tissue area $a$, and $a_{f}$ is the minimum coral size at reproduction.
+$$
+f_a = 
+\begin{cases} 0 & \mathrm{for \ } a < a_f \\
+p(a-a_f) & \mathrm{for \ } a \geq{a_f}
+\end{cases}
+$$
+```{r, echo=FALSE}
+p_branch <- 232   # fecundity per coral per unit size, measured in eggs per cm2 per year
+p_mass <- 1198
+a_max <- 10000 # maximum coral size
+a_f_branch <- 100  # coral size at reproductive maturity
+a_f_mass <- 50
+
+a_set <- seq(from= 0, to = a_max, length.out = 5000)
+
+f_set_branch <- p_branch*(a_set - a_f_branch)
+f_set_mass <- p_mass*(a_set - a_f_mass)
+for(i in 1:length(f_set_branch)){f_set_branch[i] <- max(0,f_set_branch[i])}
+for(i in 1:length(f_set_mass)){f_set_mass[i] <- max(0,f_set_mass[i])}
+plot(a_set,f_set_mass/(10^6),lwd=2,col='black',xlab='Colony Size (cm2)',ylab='Fecundity (millions of eggs per coral colony)',type='l',las=1); lines(a_set,f_set_branch/(10^6),lwd=2,col='blue'); legend(x = 0, y = 11,legend=c('Massive','Branching'),lwd=2,col=c('black','blue'),lty=1)
+
+```
+
+Larvae that are produced enter the larval size class $L$ and settle (recruit) with a probability $s_L$. Larvae that do not settle perish. Thus, the number of recruits in the current year is given by the sum of survival of the previous year's recruits (at a rate $s_R$) and this new recruitment of larvae:
+$$
+R_{t+1} = s_RR_t + s_LL_t.
+$$
+
+Larval survival is given by an exponential function with 50% mortality within 37 days. We assume that larval settlement happens within.... NOTE: MODEL IS LIKELY TO BE QUITE SENSITIVE TO THIS PARAMETER.
+```{r, echo=FALSE}
+tset <- seq(from = 0, to = 1, length.out = 1000)
+d <- -365/37*log(0.5) # larval decay rate: 50% mortality within 37 days
+s_L_set <- exp(-d*tset)
+plot(tset*365,s_L_set,lwd=2,type='l',xlab='Time in days',ylab='Probability of Survival',las=1); abline(h=0.5,lty=2); abline(v = 37,lty=2)
+
+s_L_branch <- exp(-d*200/365)
+s_L_mass <- s_L_branch
+
+```
+
+
+Recruit survival is between 100% and 50% for branching corals, and between 100% and 35% for massive corals.
+
+```{r, echo=FALSE}
+
+s_R_branch <- mean(c(100,50))
+s_R_mass <- mean(c(100,35))
+
+```
+
+
+
+#### Survival of growing corals
+Corals that have recruited to the reef survive as a function of their size **[CITATIONS]**. We represent survival $s_a$ as a saturating function of individual size, where $b$ is the rate at which increasing size decreases mortality, $s_{min}$ is the minimum probability of survival (for the smallest corals), and $s_{max}$ is the maximum probability of survival (for the largest corals):
+$$
+s_a = \left(s_{max}-s_{min}\right)\left(1-e^{-ba}\right)+s_{min}
+$$
+Note that we are assuming that very large corals have an extremely low probability of total mortality, such that survival probability approaches 1 as coral size increases. While these coral colonies may experience partial mortality (see below) in a given year, they are unlikely to die outright in a single time interval.
+
+```{r, echo=FALSE}
+
+massive.dat.size <- c(50,100,200,300)
+massive.dat.surv <- 1-c(.069,.041,.033,.034)
+
+branching.dat.size <- c(.25,3147)
+branching.dat.surv <- 1-c(.071,.02)
+
+plot(massive.dat.size,massive.dat.surv,las=1,xlab='Colony Size',ylab='Probability of Survival',ylim=c(.8,1),xlim=c(0,3500)); #lines(massive.dat.size,massive.dat.surv)
+points(branching.dat.size,branching.dat.surv,col='blue')
+
+s_max_mass <- max(massive.dat.surv)
+s_max_branch <- max(branching.dat.surv)
+s_min_mass <- .8
+s_min_branch <- 0.929 #s_min_mass
+b_mass <- .03
+b_branch <- .005 #b_mass
+
+s_set_mass <- (s_max_mass-s_min_mass)*(1 - exp(-b_mass*a_set))+s_min_mass
+s_set_branch <- (s_max_branch - s_min_branch)*(1-exp(-b_branch*a_set))+s_min_branch
+lines(a_set,s_set_mass,lwd=2,col='black'); lines(a_set,s_set_branch,lwd=2,col='blue')
+legend(x = 300, y = 0.3, legend=c('Empirical Data','Curve Fit, Branching', 'Curve Fit, Massive'),pt.cex=c(1,0,0),col=c('black','blue','black'),pch=21,lwd=c(1,2,2),lty=c(0,1,1))
+```
+
+
+#### Growth
+If corals survive, they may either grow to a larger size class, or shrink due to partial mortality. Observational data suggest that colony radii grow at a finite rate per year, such that while larger corals add more total tissue area per year, this represents a smaller proportional increase in size than that of smaller corals **[CITATIONS]**. If $g$ is the absolute increase in radius, then the radius of a coral $r$ increases over time according to
+$$
+r_{t+1} = r_t + g.
+$$
+
+Thus the planar area of a coral at any time $t$ can be computed as:
+$$
+a_{t} = \pi r_t^2 = \pi \left(r_0+gt\right)^2
+$$
+and the increase in coral tissue area $a$ is given by:
+$$
+\Delta a = a_{t+1} - a_t= \pi \left(r_t + g\right)^2-\pi r_t^2 = \pi \left(r^2_t+2r_tg+g^2-r_t^2\right) =\pi g\left(2r_t+g\right).
+$$
+
+```{r, echo=FALSE}
+g_branch <- 7.4
+g_mass <- 1
+
+r_set <- sqrt(a_set/pi)
+r_future_branch <- r_set + g_branch
+r_future_mass <- r_set + g_mass
+
+a_future_branch <- pi*r_future_branch^2
+a_future_mass <- pi*r_future_mass^2
+
+growth_branch <- a_future_branch - a_set
+growth_mass <- a_future_mass - a_set
+
+plot(a_set,growth_branch,lwd=2,col='blue',xlab='Coral Size (cm2)',ylab='Increase in Area (cm2)',type='l',las=1,ylim=c(0,3000)); lines(a_set,growth_mass,lwd=2,col='black'); legend(x = 0, y = 3000,legend=c('Massive','Branching'),lwd=2,col=c('black','blue'),lty=1)
+
+plot(a_set,growth_branch/a_set,lwd=2,col='blue',xlab='Coral Size (cm2)',ylab='Percent Growth',type='l',las=1,ylim=c(0,2)); lines(a_set,growth_mass/a_set,lwd=2,col='black');  legend(x = 7000, y = 1.8,legend=c('Massive','Branching'),lwd=2,col=c('black','blue'),lty=1)
+
+plot(a_set,a_future_branch,lwd=2,col='blue',xlab='Coral Size at time t (cm2)',ylab='Coral Size at t+1 (cm2)',type='l',las=1,ylim=c(0,10000)); lines(a_set,a_future_mass,lwd=2,col='black'); legend(x = 0, y = 10000,legend=c('Massive','Branching'),lwd=2,col=c('black','blue'),lty=1)
+
+```
+
+
+
+#### Partial Mortality
+
+Partial mortality accounts for injury that causes death of some coral tissue, but not the death of the whole individual. This tissue loss results in a decrease in coral size and, from the perspective of our model, a shift to a lower size class. Larger corals are more likely to experience partial mortality because their greater surface area increases the probability of encounters with agents of damage (debris, corallivory, etc) **[CITATIONS]**. On average, branching corals appear to experience a 65% incidence of injury over three years, while massive corals have a 90% incidence of injury over the same timeframe. 
+
+```{r, echo=FALSE}
+# In other words, for branching corals, 100-65% = 35% have a probability of NO injury over the course of 3 years.
+# Thus the probability of remaining uninjured each year is 0.35^(1/3), and the probability of injury in any given year is 1 - 0.35^(1/3)
+m_branch <- 1-((1-.65)^(1/3))
+m_mass <- 1-((1-.9)^(1/3))
+```
+
+If a coral experiences partial mortality, how much tissue does it lose? We use data from Pisapia et al. (2016) indicating that for branching corals, the severity of mortality is between 5-30% and for massive corals it is between 2-35%. We assume a uniform distribution of injury across the severity levels bounded by these ranges, and compute the probability of transitioning to a smaller size class accordingly. 
+
+
+## Model Analysis
+We are interested in the effects of changing vital rates on the size distribution and overal growth rate of a population of coral colonies. We begin by considering a reference ('control') case, in which mean coral colony size is relatively large and the population has an exponential growth rate of $\lambda = 1.35$. Because $\lambda > 1$, this implies that the population will grow over time.
+
+In empirical practice, corals are typically not classified into such narrow size ranges. Therefore, we bin our corals into five size classes (in accordance with our empirical data) to improve ease of comparison.
+```{r, echo=FALSE}
+
+# FUNCTION TO TURN A FULL SIZE DISTRIBUTION INTO A 5-BIN DISTRIBUTION
+
+# Rearrange contents of the stable stage distribution to be consistent with empirical data
+# Empiricists take 90th percentile as cutoff, then divide into 5 classes below that, including everything above the 90th percentile in the 5th class
+cum.dens <- function(ss){
+  cor.dist <- ss[3:length(ss)]/sum(ss[3:length(ss)]) # Holding vector for corrected distribution, looking only at corals of detectable sizes (e.g., that are not larvae or recruits)
+  cum.cor.dens <- NaN*cor.dist # Holding vector for cumulative distribution
+  cum.cor.dens[1] <- cor.dist[1]; for(i in 2:length(cum.cor.dens)){ 	cum.cor.dens[i] <- cum.cor.dens[i-1]+cor.dist[i] } # Compute the proportion of corals that are in each size bin or smaller
+  stop <- min(which(cum.cor.dens > 0.9))  # Compute the size class at which you have accumulated at least 90% of your individuals  
+  classes.per.bin<-floor(stop/5) # Compute the number of classes that will be pooled together into each quintile.
+  ss.cum <- rep(NaN,5)
+  for(i in 1:4){ ss.cum[i] <- sum(cor.dist[((i-1)*classes.per.bin+1):(i*classes.per.bin)]) }
+  ss.cum[5] <- sum(cor.dist[(4*classes.per.bin+1):(length(cor.dist))])
+  ss.cum
+}
+
+```
+
+
+```{r}
+# CONTROL PARAMETER SET
+r_max <- 100 # maximum radius of a head of coral (in cm)
+
+# branching corals
+p_branch <- 232 # production of larvae per cm^2
+a_f_branch <- 100 # minimum reproductive planar area in cm^2
+r_f_branch <- sqrt(a_f_branch/pi) # minimum reproductive radius in cm
+d <- -365/37*log(0.5) # larval decay rate: 50% mortality within 37 days
+s_L_branch <- exp(-d * 200 / 365)*0.000009 # probability of larval survival x recruits per larva
+s_R_branch <- 0.75 #mean(c(1.00,.50)) # probability of recruit survival
+s_max_branch <- 0.98 # maximum probability of survival
+s_min_branch <- 0.929 # minimum probability of survival
+b_branch <- 0.005 # curvature of survival function
+g_branch <- 7.4 # linear extension rate in cm/year
+g_rec_branch <- .5 # probability that a recruit grows into a detectable size class
+g_prob_branch <- 1 # probability that maximum growth happens
+m_branch <- 1-((1-.65)^(1/3)) # probability of partial mortality
+arealoss_min_branch <- .05 # minimum area loss given partial mortality
+arealoss_max_branch <- .30 # maximum area loss given partial mortality
+
+
+# massive corals
+p_mass <- 1198
+a_f_mass <- 50 # minimum reproductive planar area in cm^2
+r_f_mass <- sqrt(a_f_mass/pi) # minimum reproductive radius in cm
+d <- -365/37*log(0.5) # larval decay rate: 50% mortality within 37 days
+s_L_mass <- exp(-d * 20 / 365)*0.000009 #exp(-d * 200 / 365)*0.000009 # probability of larval survival
+s_R_mass <- mean(c(1.00,.35)) # probability of recruit survival
+s_max_mass <- 0.967 # maximum probability of survival
+s_min_mass <- 0.8 #0.5 # minimum probability of survival
+b_mass <- 0.03 # curvature of survival function
+g_mass <- 1 # linear extension rate in cm/year
+g_rec_mass <- .5 #0.1 # probability that a recruit grows into a detectable size class
+g_prob_mass <- 1 # probability that maximum growth happens
+m_mass <- 1-((1-.9)^(1/3)) # probability of partial mortality
+arealoss_min_mass <- .02 # minimum area loss given partial mortality
+arealoss_max_mass <- .35 # maximum area loss given partial mortality
+
+
+```
+
+
+```{r}
+
+# BRANCHING CORALS
+
+# Creating set of classes for branching corals
+r_set_branch <- c(0,0,seq(1,r_max,g_branch)) # Radii for branching corals. First two classes are larvae and recruits.
+classnum <- seq(1:length(r_set_branch)) # Numbering the classes
+a_set_branch <- pi * r_set_branch^2 # Computing areas of each class
+
+# Creating fecundity matrix for branching corals
+F_branch <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # fecundity matrix
+for(i in 1:length(r_set_branch)){
+  if(a_set_branch[i] > a_f_branch){ # if a coral in this size class is large enough to reproduce
+    F_branch[1,i] <- a_set_branch[i]*p_branch
+  }
+}
+
+# Creating survival matrix for branching corals
+S_branch <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch))
+S_branch[2,2] <- s_R_branch # Survival of recruits
+for(i in 3:length(r_set_branch)){ # For all corals of detectable size
+  S_branch[i,i] <- (s_max_branch-s_min_branch)*(1-exp(-b_branch*a_set_branch[i]))+s_min_branch
+}
+
+# Creating partial mortality probability matrix for branching corals
+M_branch <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch))
+for(i in 3:length(r_set_branch)){ # For all corals of detectable size
+  M_branch[i,i] <- m_branch
+}
+
+# Creating partial mortality magnitude matrix for branching corals
+maxshrink <- r_set_branch*sqrt(1-arealoss_max_branch) # Smallest radius a coral could shrink to due to partial mortality in a single timestep
+classmaxshrink <- NaN*classnum # Class number to which a coral could shrink due to partial mortality
+for(i in 1:length(r_set_branch)){
+    classmaxshrink[i] <- 1
+    for(j in 1:length(r_set_branch)){ if(r_set_branch[j] <= maxshrink[i]){classmaxshrink[i] <- classmaxshrink[i] + 1} }
+}
+
+P_branch <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # Partial mortality matrix
+for(i in 3:length(r_set_branch)){ # skip the larval and recruit stages
+  number.classes.poss <- classnum[i]-classmaxshrink[i] + 1 # number of classes you could possibly shrink
+  prob.per.class <- 1 / number.classes.poss # probability of going to any of these classes
+  for(j in 1:number.classes.poss){ P_branch[i+1-j,i] <- prob.per.class } # Assign this probability to the appropriate locations in the matrix
+}
+
+# Creating growth matrix for branching corals
+growthrad <- r_set_branch + g_branch
+classgrowth <- NaN*classnum
+for(i in 2:length(r_set_branch)){ # Class number to which a coral grows
+  classgrowth[i] <- classnum[i]
+  for(j in 1:length(r_set_branch)){ if(r_set_branch[j]*.999<=growthrad[i]){classgrowth[i] <- classnum[j]}  } # 0.999 multiplier is there because of rounding errors that sometimes are too conservative.
+}
+
+G_branch <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # Growth matrix
+for(i in 3:length(r_set_branch)){ # skip the larval and recruit stage
+  G_branch[classgrowth[i],i] <- g_prob_branch # probability of growing to the largest class 
+  # Then, divide up the remaining probability amongst the other classes
+  number.classes.poss <- classgrowth[i]-classnum[i]   # compute the number of classes you could grow in one step
+  if(number.classes.poss > 0){
+  prob.per.class <- (1-g_prob_branch) / number.classes.poss # evenly distribute the probability of not achieving maximal growth amongst these classes
+  for(j in 1:number.classes.poss){G_branch[i-1+j,i] <- prob.per.class}}}
+  if(number.classes.poss < 1){# If there's only one class to grow into, you move to it 100% of the time
+    G_branch[classgrowth[i],i] <- 1  }
+G_branch[3,2] <- g_rec_branch # All recruits grow at a fixed probability into a detectable size class
+G_branch[2,2] <- 1 - g_rec_branch # Recruits that don't grow to the next size class stay behind as recruits
+
+# Compute the overall projection matrix A
+A_branch <- F_branch + (G_branch%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S_branch
+A_branch[2,1] <- s_L_branch # Settlement of larvae
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_branch_ctrl <- Re(eigen(A_branch)$values[1]) # leading eigenvalue
+ss_branch_ctrl <- Re(eigen(A_branch)$vectors[,1]) # stable stage distribution
+mean_branch_ctrl <- sum(ss_branch_ctrl[3:length(ss_branch_ctrl)]/sum(ss_branch_ctrl[3:length(ss_branch_ctrl)])*a_set_branch[3:length(a_set_branch)]) # mean planar area of corals that are not larvae or new recruits
+mean_branch_ctrl_rad <- sqrt(mean_branch_ctrl/pi) # mean radius of corals that are not larvae or new recruits
+ss_cum_branch_ctrl <- cum.dens(ss_branch_ctrl)
+
+# Plot results: Bargraph is stable stage distribution, with growth rate and mean size listed at the top
+barplot(ss_cum_branch_ctrl*100,las=1,ylab='Percent of Individuals',xlab='Size Class',names=c('1','2','3', '4','5'),col='black',ylim=c(0,40),main=paste('Branching: Growth Rate = ',round(lambda_branch_ctrl,2),' y-1; Mean Size = ',round(mean_branch_ctrl,2),' cm^2',sep=''))
+
+
+
+# MASSIVE CORALS
+
+# Creating set of classes for massive corals
+r_set_mass <- c(0,0,seq(1,r_max,g_mass)) # Radii for massive corals. First two classes are larvae and recruits.
+classnum <- seq(1:length(r_set_mass)) # Numbering the classes
+a_set_mass <- pi * r_set_mass^2 # Computing areas of each class
+
+# Creating fecundity matrix for massive corals
+F_mass <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # fecundity matrix
+for(i in 1:length(r_set_mass)){
+  if(a_set_mass[i] > a_f_mass){ # if a coral in this size class is large enough to reproduce
+    F_mass[1,i] <- a_set_mass[i]*p_mass
+  }
+}
+
+# Creating survival matrix for massive corals
+S_mass <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass))
+S_mass[2,2] <- s_R_mass # Survival of recruits
+for(i in 3:length(r_set_mass)){ # For all corals of detectable size
+  S_mass[i,i] <- (s_max_mass-s_min_mass)*(1-exp(-b_mass*a_set_mass[i]))+s_min_mass
+}
+
+# Creating partial mortality probability matrix for massive corals
+M_mass <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass))
+for(i in 3:length(r_set_mass)){ # For all corals of detectable size
+  M_mass[i,i] <- m_mass
+}
+
+# Creating partial mortality magnitude matrix for massive corals
+maxshrink <- r_set_mass*sqrt(1-arealoss_max_mass) # Smallest radius a coral could shrink to due to partial mortality in a single timestep
+classmaxshrink <- NaN*classnum # Class number to which a coral could shrink due to partial mortality
+for(i in 1:length(r_set_mass)){
+    classmaxshrink[i] <- 1
+    for(j in 1:length(r_set_mass)){ if(r_set_mass[j] <= maxshrink[i]){classmaxshrink[i] <- classmaxshrink[i] + 1} }
+}
+
+P_mass <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # Partial mortality matrix
+for(i in 3:length(r_set_mass)){ # skip the larval and recruit stages
+  number.classes.poss <- classnum[i]-classmaxshrink[i] + 1 # number of classes you could possibly shrink
+  prob.per.class <- 1 / number.classes.poss # probability of going to any of these classes
+  for(j in 1:number.classes.poss){ P_mass[i+1-j,i] <- prob.per.class } # Assign this probability to the appropriate locations in the matrix
+}
+
+# Creating growth matrix for massive corals
+growthrad <- r_set_mass + g_mass
+classgrowth <- NaN*classnum
+for(i in 2:length(r_set_mass)){ # Class number to which a coral grows
+  classgrowth[i] <- classnum[i]
+  for(j in 1:length(r_set_mass)){ if(r_set_mass[j]*.999<=growthrad[i]){classgrowth[i] <- classnum[j]}  } # 0.999 multiplier is there because of rounding errors that sometimes are too conservative.
+}
+
+G_mass <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # Growth matrix
+for(i in 3:length(r_set_mass)){ # skip the larval and recruit stage
+  G_mass[classgrowth[i],i] <- g_prob_mass # probability of growing to the largest class 
+  # Then, divide up the remaining probability amongst the other classes
+  number.classes.poss <- classgrowth[i]-classnum[i]   # compute the number of classes you could grow in one step
+  if(number.classes.poss > 0){
+  prob.per.class <- (1-g_prob_mass) / number.classes.poss # evenly distribute the probability of not achieving maximal growth amongst these classes
+  for(j in 1:number.classes.poss){G_mass[i-1+j,i] <- prob.per.class}}}
+  if(number.classes.poss < 1){# If there's only one class to grow into, you move to it 100% of the time
+    G_mass[classgrowth[i],i] <- 1  }
+G_mass[3,2] <- g_rec_mass # All recruits grow at a fixed probability into a detectable size class
+G_mass[2,2] <- 1 - g_rec_mass # Recruits that don't grow to the next size class stay behind as recruits
+
+
+# Compute the overall projection matrix A
+A_mass <- F_mass + (G_mass%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S_mass
+A_mass[2,1] <- s_L_mass # Settlement of larvae
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_mass_ctrl <- Re(eigen(A_mass)$values[1]) # leading eigenvalue
+ss_mass_ctrl <- Re(eigen(A_mass)$vectors[,1]) # stable stage distribution
+mean_mass_ctrl <- sum(ss_mass_ctrl[3:length(ss_mass_ctrl)]/sum(ss_mass_ctrl[3:length(ss_mass_ctrl)])*a_set_mass[3:length(a_set_mass)]) # mean planar area of corals that are not larvae or new recruits
+mean_mass_ctrl_rad <- sqrt(mean_mass_ctrl/pi) # mean radius of corals that are not larvae or new recruits
+ss_cum_mass_ctrl <- cum.dens(ss_mass_ctrl)
+
+# Plot results: Bargraph is stable stage distribution, with growth rate and mean size listed at the top
+barplot(ss_cum_mass_ctrl*100,las=1,ylab='Percent of Individuals',xlab='Size Class',names=c('1','2','3', '4','5'),col='black',ylim=c(0,40),main=paste('Massive: Growth Rate = ',round(lambda_mass_ctrl,2),' y-1; Mean Size = ',round(mean_mass_ctrl,2),' cm^2',sep=''))
+
+
+```
+
+
+What are the effects of shifting demographic parameters on the growth rate and stable stage distribution of a coral population? We explore several vital rates in turn by making order of magnitude changes to model parameters.
+
+#### Increased Mortality
+Anthropogenic impacts are likely to reduce coral survivorship. Pollution and thermal stress may promote coral dysbiosis and ultimately, result in elevated whole-colony mortality [[CITATIONS]]. Here, we allow for survivorship to be reduced uniformly over all size classes by applying a survivorship reduction $s_red$:
+
+$$
+s_a = \left(s_{max}-s_{min}\right)\left(1-e^{-ba}\right)+s_{min}-s_{red}
+$$
+
+where $s_red \leq s_{min}$ to ensure that the entries in the survivorship matrix **S** are non-negative.
+
+```{r}
+# Branching corals
+s_set <- seq(from = 0, to = s_min_branch, length.out = 300)
+
+lambda_s_branch <- NaN*s_set # growth rate
+mean_area_s_branch <- lambda_s_branch # mean colony size (planar area, cm2)
+mean_rad_s_branch <- lambda_s_branch # mean colony radius (cm)
+ss_s_branch <- matrix(rep(NaN,length(r_set_branch)*length(s_set)),nrow=length(s_set),ncol=length(r_set_branch))
+ss_s_5class_branch <- matrix(rep(NaN,5*length(s_set)),nrow=length(s_set),ncol=5) # 5-class stage structure
+
+for(ctr in 1:length(s_set)){
+  s <- s_set[ctr]
+# Creating survival matrix for massive corals
+S <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch))
+S[2,2] <- s_R_branch # Survival of recruits
+for(i in 3:length(r_set_branch)){ # For all corals of detectable size
+  S[i,i] <- (s_max_branch-s_min_branch)*(1-exp(-b_branch*a_set_branch[i]))+s_min_branch-s  # compute the appropriate survivorship
+}
+
+# Transition matrix A *** EXCEPT *** for recruitment s_L
+A <- F_branch + (G_branch%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S
+A[2,1] <- s_L_branch
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_s_branch[ctr] <- Re(eigen(A)$values[1]) # leading eigenvalue
+ss <- Re(eigen(A)$vectors[,1]); ss_s_branch[ctr,] <- ss/sum(ss) # stable stage distribution
+mean_area_s_branch[ctr] <- sum(ss[3:length(ss)]/sum(ss[3:length(ss)])*a_set_branch[3:length(a_set_branch)]) # mean planar area of corals that are not larvae or new recruits
+mean_rad_s_branch[ctr] <- sqrt(mean_area_s_branch[j]/pi) # mean radius of corals that are not larvae or new recruits
+
+ss_s_5class_branch[ctr,] <- cum.dens(ss) 
+
+}
+
+
+plot(s_set,lambda_s_branch, type='l',lwd=2,las=1,ylab='Population Growth Rate, lambda',xlab='Reduction in Survivorship, s_red'); abline(h=1,lty=2)
+
+plot(s_set,mean_area_s_branch,type='l',lwd=2,las=1,ylab='Mean Colony Size (cm2)',xlab='Reduction in Survivorship, s_red')
+
+image(s_set,c(1:5),(ss_s_5class_branch),las=1,ylab='Size Class',xlab='Reduction in Survivorship, s_red')
+s_set_branch <- s_set
+
+```
+
+
+```{r}
+# Massive corals
+s_set <- seq(from = 0, to = s_min_mass, length.out = 300)
+
+lambda_s_mass <- NaN*s_set # growth rate
+mean_area_s_mass <- lambda_s_mass # mean colony size (planar area, cm2)
+mean_rad_s_mass <- lambda_s_mass # mean colony radius (cm)
+ss_s_mass <- matrix(rep(NaN,length(r_set_mass)*length(s_set)),nrow=length(s_set),ncol=length(r_set_mass))
+ss_s_5class_mass <- matrix(rep(NaN,5*length(s_set)),nrow=length(s_set),ncol=5) # 5-class stage structure
+
+for(ctr in 1:length(s_set)){
+  s <- s_set[ctr]
+# Creating survival matrix for massive corals
+S <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass))
+S[2,2] <- s_R_mass # Survival of recruits
+for(i in 3:length(r_set_mass)){ # For all corals of detectable size
+  S[i,i] <- (s_max_mass-s_min_mass)*(1-exp(-b_mass*a_set_mass[i]))+s_min_mass-s  # compute the appropriate survivorship
+}
+
+# Transition matrix A *** EXCEPT *** for recruitment s_L
+A <- F_mass + (G_mass%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S
+A[2,1] <- s_L_mass
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_s_mass[ctr] <- Re(eigen(A)$values[1]) # leading eigenvalue
+ss <- Re(eigen(A)$vectors[,1]); ss_s_mass[ctr,] <- ss/sum(ss) # stable stage distribution
+mean_area_s_mass[ctr] <- sum(ss[3:length(ss)]/sum(ss[3:length(ss)])*a_set_mass[3:length(a_set_mass)]) # mean planar area of corals that are not larvae or new recruits
+mean_rad_s_mass[ctr] <- sqrt(mean_area_s_mass[j]/pi) # mean radius of corals that are not larvae or new recruits
+
+ss_s_5class_mass[ctr,] <- cum.dens(ss) 
+
+}
+
+
+plot(s_set,lambda_s_mass, type='l',lwd=2,las=1,ylab='Population Growth Rate, lambda',xlab='Reduction in Survivorship, s_red'); abline(h=1,lty=2)
+
+plot(s_set,mean_area_s_mass,type='l',lwd=2,las=1,ylab='Mean Colony Size (cm2)',xlab='Reduction in Survivorship, s_red')
+
+image(s_set,c(1:5),(ss_s_5class_mass),las=1,ylab='Size Class',xlab='Reduction in Survivorship, s_red')
+s_set_mass <- s_set
+
+```
+
+
+#### Decreased Growth
+Even when the stresses described above are sub-lethal, they are likely to reduce the growth rate (e.g., rate of linear extension) of a head of coral.
+
+
+```{r}
+# Branching corals
+g_prob_set <- seq(from = 0, to = 1, length.out = 300)
+
+lambda_g_branch <- NaN*g_prob_set # growth rate
+mean_area_g_branch <- lambda_g_branch # mean colony size (planar area, cm2)
+mean_rad_g_branch <- lambda_g_branch # mean colony radius (cm)
+ss_g_branch <- matrix(rep(NaN,length(r_set_branch)*length(g_prob_set)),nrow=length(g_prob_set),ncol=length(r_set_branch))
+ss_g_5class_branch <- matrix(rep(NaN,5*length(g_prob_set)),nrow=length(g_prob_set),ncol=5) # 5-class stage structure
+
+for(ctr in 1:length(g_prob_set)){
+  g_prob <- g_prob_set[ctr]
+
+  
+  
+  # Creating growth matrix for massive corals
+growthrad <- r_set_branch + g_branch
+classgrowth <- NaN*classnum
+for(i in 2:length(r_set_branch)){ # Class number to which a coral grows
+  classgrowth[i] <- classnum[i]
+  for(j in 1:length(r_set_branch)){ if(r_set_branch[j]*.999<=growthrad[i]){classgrowth[i] <- classnum[j]}  } # 0.999 multiplier is there because of rounding errors that sometimes are too conservative.
+}
+
+G <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # Growth matrix
+for(i in 3:length(r_set_branch)){ # skip the larval and recruit stage
+  G[classgrowth[i],i] <- g_prob # probability of growing to the largest class 
+  # Then, divide up the remaining probability amongst the other classes
+  number.classes.poss <- classgrowth[i]-classnum[i]   # compute the number of classes you could grow in one step
+  if(number.classes.poss > 0){
+  prob.per.class <- (1-g_prob) / number.classes.poss # evenly distribute the probability of not achieving maximal growth amongst these classes
+  for(j in 1:number.classes.poss){G[i-1+j,i] <- prob.per.class}}}
+  if(number.classes.poss < 1){# If there's only one class to grow into, you move to it 100% of the time
+    G[classgrowth[i],i] <- 1  }
+G[3,2] <- g_rec_branch # All recruits grow at a fixed probability into a detectable size class
+G[2,2] <- 1 - g_rec_branch # Recruits that don't grow to the next size class stay behind as recruits
+
+
+
+# Transition matrix A *** EXCEPT *** for recruitment s_L
+A <- F_branch + (G%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S_branch
+A[2,1] <- s_L_branch
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_g_branch[ctr] <- Re(eigen(A)$values[1]) # leading eigenvalue
+ss <- Re(eigen(A)$vectors[,1]); ss_g_branch[ctr,] <- ss/sum(ss) # stable stage distribution
+mean_area_g_branch[ctr] <- sum(ss[3:length(ss)]/sum(ss[3:length(ss)])*a_set_branch[3:length(a_set_branch)]) # mean planar area of corals that are not larvae or new recruits
+mean_rad_g_branch[ctr] <- sqrt(mean_area_g_branch[j]/pi) # mean radius of corals that are not larvae or new recruits
+
+# Re-cluster into 5 size classes
+ss_g_5class_branch[ctr,] <- cum.dens(ss) 
+
+}
+
+
+plot(g_prob_set,lambda_g_branch, type='l',lwd=2,las=1,ylab='Population Growth Rate, lambda',xlab='Probability of Max Linear Extension'); abline(h=1,lty=2)
+
+plot(g_prob_set,mean_area_g_branch,type='l',lwd=2,las=1,ylab='Mean Colony Size (cm2)',xlab='Probability of Max Linear Extension')
+
+image(g_prob_set,c(1:5),(ss_g_5class_branch),las=1,ylab='Size Class',xlab='Probability of Max Linear Extension')
+
+```
+
+```{r}
+# Branching corals
+g_prob_set <- seq(from = 0, to = 1, length.out = 300)
+
+lambda_g_mass <- NaN*g_prob_set # growth rate
+mean_area_g_mass <- lambda_g_mass # mean colony size (planar area, cm2)
+mean_rad_g_mass <- lambda_g_mass # mean colony radius (cm)
+ss_g_mass <- matrix(rep(NaN,length(r_set_mass)*length(g_prob_set)),nrow=length(g_prob_set),ncol=length(r_set_mass))
+ss_g_5class_mass <- matrix(rep(NaN,5*length(g_prob_set)),nrow=length(g_prob_set),ncol=5) # 5-class stage structure
+
+for(ctr in 1:length(g_prob_set)){
+  g_prob <- g_prob_set[ctr]
+
+  # Creating growth matrix for massive corals
+growthrad <- r_set_mass + g_mass
+classgrowth <- NaN*classnum
+for(i in 2:length(r_set_mass)){ # Class number to which a coral grows
+  classgrowth[i] <- classnum[i]
+  for(j in 1:length(r_set_mass)){ if(r_set_mass[j]*.999<=growthrad[i]){classgrowth[i] <- classnum[j]}  } # 0.999 multiplier is there because of rounding errors that sometimes are too conservative.
+}
+
+G <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # Growth matrix
+for(i in 3:length(r_set_mass)){ # skip the larval and recruit stage
+  G[classgrowth[i],i] <- g_prob # probability of growing to the largest class 
+  # Then, divide up the remaining probability amongst the other classes
+  number.classes.poss <- classgrowth[i]-classnum[i]   # compute the number of classes you could grow in one step
+  if(number.classes.poss > 0){
+  prob.per.class <- (1-g_prob) / number.classes.poss # evenly distribute the probability of not achieving maximal growth amongst these classes
+  for(j in 1:number.classes.poss){G[i-1+j,i] <- prob.per.class}}}
+  if(number.classes.poss < 1){# If there's only one class to grow into, you move to it 100% of the time
+    G[classgrowth[i],i] <- 1  }
+G[3,2] <- g_rec_mass # All recruits grow at a fixed probability into a detectable size class
+G[2,2] <- 1 - g_rec_mass # Recruits that don't grow to the next size class stay behind as recruits
+
+
+
+# Transition matrix A *** EXCEPT *** for recruitment s_L
+A <- F_mass + (G%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S_mass
+A[2,1] <- s_L_mass
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_g_mass[ctr] <- Re(eigen(A)$values[1]) # leading eigenvalue
+ss <- Re(eigen(A)$vectors[,1]); ss_g_mass[ctr,] <- ss/sum(ss) # stable stage distribution
+mean_area_g_mass[ctr] <- sum(ss[3:length(ss)]/sum(ss[3:length(ss)])*a_set_mass[3:length(a_set_mass)]) # mean planar area of corals that are not larvae or new recruits
+mean_rad_g_mass[ctr] <- sqrt(mean_area_g_mass[j]/pi) # mean radius of corals that are not larvae or new recruits
+
+# Re-cluster into 5 size classes
+ss_g_5class_mass[ctr,] <- cum.dens(ss) 
+
+}
+
+
+plot(g_prob_set,lambda_g_mass, type='l',lwd=2,las=1,ylab='Population Growth Rate, lambda',xlab='Probability of Max Linear Extension'); abline(h=1,lty=2)
+
+plot(g_prob_set,mean_area_g_mass,type='l',lwd=2,las=1,ylab='Mean Colony Size (cm2)',xlab='Probability of Max Linear Extension')
+
+image(g_prob_set,c(1:5),(ss_g_5class_mass),las=1,ylab='Size Class',xlab='Probability of Max Linear Extension')
+
+```
+
+
+
+
+
+#### Reduced Fecundity
+Stressed corals may have reduced energetic stores to invest in reproduction. The consequent reductions in fecundity drive reductions in population growth rate, although corals tend to shift towards larger mean size. This is due to a reduction in the production of new recruits.
+
+
+```{r}
+# Branching corals
+p_set_branch <- seq(from = 0, to = p_branch, length.out = 300)
+
+lambda_p_branch <- NaN*p_set_branch # growth rate
+mean_area_p_branch <- lambda_p_branch # mean colony size (planar area, cm2)
+mean_rad_p_branch <- lambda_p_branch # mean colony radius (cm)
+ss_p_branch <- matrix(rep(NaN,length(r_set_branch)*length(p_set_branch)),nrow=length(p_set_branch),ncol=length(r_set_branch))
+ss_p_5class_branch <- matrix(rep(NaN,5*length(p_set_branch)),nrow=length(p_set_branch),ncol=5) # 5-class stage structure
+
+for(ctr in 1:length(p_set_branch)){
+  p <- p_set_branch[ctr]
+
+  # Creating fecundity matrix for branching corals
+F <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # fecundity matrix
+for(i in 1:length(r_set_branch)){
+  if(a_set_branch[i] > a_f_branch){ # if a coral in this size class is large enough to reproduce
+    F[1,i] <- a_set_branch[i]*p
+  }
+}
+
+
+# Transition matrix A *** EXCEPT *** for recruitment s_L
+A <- F + (G_branch%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S_branch
+A[2,1] <- s_L_branch
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_p_branch[ctr] <- Re(eigen(A)$values[1]) # leading eigenvalue
+ss <- Re(eigen(A)$vectors[,1]); ss_p_branch[ctr,] <- ss/sum(ss) # stable stage distribution
+mean_area_p_branch[ctr] <- sum(ss[3:length(ss)]/sum(ss[3:length(ss)])*a_set_branch[3:length(a_set_branch)]) # mean planar area of corals that are not larvae or new recruits
+mean_rad_p_branch[ctr] <- sqrt(mean_area_p_branch[j]/pi) # mean radius of corals that are not larvae or new recruits
+
+# Re-cluster into 5 size classes
+ss_p_5class_branch[ctr,] <- cum.dens(ss) 
+
+}
+
+
+plot(p_set_branch,lambda_p_branch, type='l',lwd=2,las=1,ylab='Population Growth Rate, lambda',xlab='Fecundity (eggs per cm2)'); abline(h=1,lty=2)
+
+plot(p_set_branch,mean_area_p_branch,type='l',lwd=2,las=1,ylab='Mean Colony Size (cm2)',xlab='Fecundity (eggs per cm2)')
+
+image(p_set_branch,c(1:5),(ss_p_5class_branch),las=1,ylab='Size Class',xlab='Fecundity (eggs per cm2)')
+
+```
+
+
+
+```{r}
+# Massive corals
+p_set_mass <- seq(from = 0, to = p_mass, length.out = 300)
+
+lambda_p_mass <- NaN*p_set_mass # growth rate
+mean_area_p_mass <- lambda_p_mass # mean colony size (planar area, cm2)
+mean_rad_p_mass <- lambda_p_mass # mean colony radius (cm)
+ss_p_mass <- matrix(rep(NaN,length(r_set_mass)*length(p_set_mass)),nrow=length(p_set_mass),ncol=length(r_set_mass))
+ss_p_5class_mass <- matrix(rep(NaN,5*length(p_set_mass)),nrow=length(p_set_mass),ncol=5) # 5-class stage structure
+
+for(ctr in 1:length(p_set_mass)){
+  p <- p_set_mass[ctr]
+
+  # Creating fecundity matrix for branching corals
+F <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # fecundity matrix
+for(i in 1:length(r_set_mass)){
+  if(a_set_mass[i] > a_f_mass){ # if a coral in this size class is large enough to reproduce
+    F[1,i] <- a_set_mass[i]*p
+  }
+}
+
+
+# Transition matrix A *** EXCEPT *** for recruitment s_L
+A <- F + (G_mass%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S_mass
+A[2,1] <- s_L_mass
+
+# Compute the leading eigenvalue (growth rate) and its eigenvector (stable stage distribution)
+lambda_p_mass[ctr] <- Re(eigen(A)$values[1]) # leading eigenvalue
+ss <- Re(eigen(A)$vectors[,1]); ss_p_mass[ctr,] <- ss/sum(ss) # stable stage distribution
+mean_area_p_mass[ctr] <- sum(ss[3:length(ss)]/sum(ss[3:length(ss)])*a_set_mass[3:length(a_set_mass)]) # mean planar area of corals that are not larvae or new recruits
+mean_rad_p_mass[ctr] <- sqrt(mean_area_p_mass[j]/pi) # mean radius of corals that are not larvae or new recruits
+
+# Re-cluster into 5 size classes
+ss_p_5class_mass[ctr,] <- cum.dens(ss) 
+
+}
+
+
+plot(p_set_mass,lambda_p_mass, type='l',lwd=2,las=1,ylab='Population Growth Rate, lambda',xlab='Fecundity (eggs per cm2)'); abline(h=1,lty=2)
+
+plot(p_set_mass,mean_area_p_mass,type='l',lwd=2,las=1,ylab='Mean Colony Size (cm2)',xlab='Fecundity (eggs per cm2)')
+
+image(p_set_mass,c(1:5),(ss_p_5class_mass),las=1,ylab='Size Class',xlab='Fecundity (eggs per cm2)')
+
+```
+
+
+#### Increased Severity of Partial Mortality
+Finally, sub-lethal stress may still cause partial mortality, killing some, but not all, polyps in a coral colony. If these partial mortality events become more severe, this may also drive transitions in coral size distribution, though these transitions tend to be more subtle than when considering the other demographic rates.
+
+
+
+
+
+
+#### Composite figure
+```{r}
+par(mfrow=c(2,3),mar=c(4,4,0,3))
+
+plot((s_min_branch - s_set_branch)/s_min_branch,lambda_s_branch, type='l',lwd=2,las=1,col='blue',ylab='Population Growth Rate, lambda',xlab=''); lines((s_min_mass - s_set_mass)/s_min_mass,lambda_s_mass,lwd=2); abline(h=1,lty=2)
+plot(g_prob_set,lambda_g_branch, type='l',lwd=2,las=1,col='blue',ylab='',xlab=''); lines(g_prob_set,lambda_g_mass,lwd=2); abline(h=1,lty=2)
+plot(p_set_branch/p_branch,lambda_p_branch, type='l',lwd=2,las=1,ylab='',xlab='',col='blue'); lines(p_set_mass/p_mass,lambda_p_mass,lwd=2); abline(h=1,lty=2)
+
+plot((s_min_branch - s_set_branch)/s_min_branch,mean_area_s_branch,type='l',lwd=2,las=1,col='blue',ylab='Mean Colony Size (cm2)',xlab='Proportion of Control Case Survivorship',axes=FALSE); axis(2,pretty(range(mean_area_s_branch)),las=1); par(new=TRUE); plot((s_min_mass-s_set_mass)/s_min_mass,mean_area_s_mass,type='l',lwd=2,axes=FALSE,xlab='',ylab=''); axis(4,pretty(range(mean_area_s_mass)),las=1); axis(1,pretty(range((s_min_branch - s_set_branch)/s_min_branch))); box()
+plot(g_prob_set,mean_area_g_branch,type='l',lwd=2,las=1,col='blue',ylab='',xlab='Proportion of Maximum Growth',axes=FALSE); axis(2,pretty(range(mean_area_g_branch)),las=1); par(new=TRUE); plot(g_prob_set,mean_area_g_mass,type='l',lwd=2,axes=FALSE,xlab='',ylab=''); axis(4,pretty(range(mean_area_g_mass)),las=1); axis(1,pretty(range(g_prob_set))); box()
+plot(p_set_branch/p_branch,mean_area_p_branch,type='l',lwd=2,las=1,col='blue',ylab='',xlab='Proportion of Maximum Adult Fecundity',axes=FALSE); axis(2,pretty(range(mean_area_p_branch)),las=1); par(new=TRUE); plot(p_set_mass/p_mass,mean_area_p_mass,type='l',lwd=2,axes=FALSE,xlab='',ylab=''); axis(4,pretty(range(mean_area_p_mass)),las=1); axis(1,pretty(range(p_set_branch/p_branch))); box(); legend(.3,450,legend=c('Massive','Branching'),lwd=2,col=c('black','blue'))
+
+
+```
+
+
+
+
+#### Demographic Trends May Indicate Changes to Vital Rates
+Our model predicts some distinct "signatures" to the changes in population structure caused by shifts in each coral vital rate. Although not all altered population structures may be statistically distinguishable from one another, our results highlight the importance of coral demographic data (in particular, data on shifts in coral colony size over time) to determining population status and assessing population viability.
+
+While stable stage distributions may be most distinctive and informative, in reality it can take several years of stable environmental conditions for coral populations to equilibrate at these size distributions. Therefore, we examine the trajectories of populations that have recently experienced a change in a demographic parameter (e.g., an increase in mortality, decrease in growth, or decrease in fecundity) over short and long timescales by comparing the emerging size distributions to the stable stage distributions before (i.e., baseline parameters) and after (i.e., with new vital rates) shifts in these demographic parameters.
+
+
+```{r}
+
+### Branching Corals ###
+## Control Case:
+# A_branch is the projection matrix
+# ss_branch_ctrl is the stable stage distribution
+# lambda_branch_ctrl is the leading eigenvalue
+# ss_cum_branch_ctrl is the 5-stage stage distribution
+
+## Reduced survivorship
+s_red_branch <- s_min_branch/7.24
+
+# Creating survival matrix for branching corals
+S <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch))
+S[2,2] <- s_R_branch # Survival of recruits
+for(i in 3:length(r_set_branch)){ # For all corals of detectable size
+  S[i,i] <- (s_max_branch-s_min_branch)*(1-exp(-b_branch*a_set_branch[i]))+s_min_branch-s_red_branch  # compute the appropriate survivorship
+}
+
+# Transition matrix A
+A_red_s_branch <- F_branch + (G_branch%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S
+A_red_s_branch[2,1] <- s_L_branch
+
+# Metrics
+lambda_branch_red_s <- Re(eigen(A_red_s_branch)$values[1])
+ss_red_s_branch <- Re(eigen(A_red_s_branch)$vectors[,1]); ss_red_s_branch <- ss_red_s_branch/sum(ss_red_s_branch)
+ss_cum_red_s_branch <- cum.dens(ss_red_s_branch) 
+
+
+## Reduced growth
+g_red_branch <- .0335
+
+# Creating growth matrix for branching corals
+growthrad <- r_set_branch + g_branch
+classgrowth <- NaN*classnum
+for(i in 2:length(r_set_branch)){ # Class number to which a coral grows
+  classgrowth[i] <- classnum[i]
+  for(j in 1:length(r_set_branch)){ if(r_set_branch[j]*.999<=growthrad[i]){classgrowth[i] <- classnum[j]}  } # 0.999 multiplier is there because of rounding errors that sometimes are too conservative.
+}
+
+G <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # Growth matrix
+for(i in 3:length(r_set_branch)){ # skip the larval and recruit stage
+  G[classgrowth[i],i] <- g_red_branch # probability of growing to the largest class 
+  # Then, divide up the remaining probability amongst the other classes
+  number.classes.poss <- classgrowth[i]-classnum[i]   # compute the number of classes you could grow in one step
+  if(number.classes.poss > 0){
+  prob.per.class <- (1-g_red_branch) / number.classes.poss # evenly distribute the probability of not achieving maximal growth amongst these classes
+  for(j in 1:number.classes.poss){G[i-1+j,i] <- prob.per.class}}}
+  if(number.classes.poss < 1){# If there's only one class to grow into, you move to it 100% of the time
+    G[classgrowth[i],i] <- 1  }
+G[3,2] <- g_rec_branch # All recruits grow at a fixed probability into a detectable size class
+G[2,2] <- 1 - g_rec_branch # Recruits that don't grow to the next size class stay behind as recruits
+
+# Transition matrix A
+A_red_g_branch <- F_branch + (G%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S_branch
+A_red_g_branch[2,1] <- s_L_branch
+
+# Metrics
+lambda_branch_red_g <- Re(eigen(A_red_g_branch)$values[1])
+ss_red_g_branch <- Re(eigen(A_red_g_branch)$vectors[,1]); ss_red_g_branch <- ss_red_g_branch/sum(ss_red_g_branch)
+ss_cum_red_g_branch <- cum.dens(ss_red_g_branch) 
+
+
+## Reduced fecundity
+p_red_branch <- p_branch/65.5
+
+# Creating fecundity matrix for branching corals
+F <- matrix(rep(0,length(r_set_branch)^2),nrow=length(r_set_branch),ncol=length(r_set_branch)) # fecundity matrix
+for(i in 1:length(r_set_branch)){
+  if(a_set_branch[i] > a_f_branch){ # if a coral in this size class is large enough to reproduce
+    F[1,i] <- a_set_branch[i]*p_red_branch
+  }
+}
+
+# Transition matrix A
+A_red_p_branch <- F + (G_branch%*%(diag(length(r_set_branch))-M_branch)+P_branch%*%M_branch)%*%S_branch
+A_red_p_branch[2,1] <- s_L_branch
+
+# Metrics
+lambda_branch_red_p <- Re(eigen(A_red_p_branch)$values[1])
+ss_red_p_branch <- Re(eigen(A_red_p_branch)$vectors[,1]); ss_red_p_branch <- ss_red_p_branch/sum(ss_red_p_branch)
+ss_cum_red_p_branch <- cum.dens(ss_red_p_branch) 
+
+
+
+
+# Simulate 100 years of time
+years <- 50
+ss_ctrl_set_branch <- matrix(rep(NaN,(years+1)*length(r_set_branch)),ncol=(years+1),nrow=length(r_set_branch))
+ss_ctrl_set_branch[,1] <- ss_branch_ctrl
+ss_s_set_branch <- ss_ctrl_set_branch
+ss_g_set_branch <- ss_ctrl_set_branch
+ss_p_set_branch <- ss_ctrl_set_branch
+
+mean_area_ctrl_set_branch <- rep(NaN,years+1)
+mean_area_ctrl_set_branch[1] <- sum(ss_branch_ctrl[3:length(ss_branch_ctrl)]/sum(ss_branch_ctrl[3:length(ss_branch_ctrl)])*a_set_branch[3:length(a_set_branch)]) 
+mean_area_s_set_branch <- mean_area_ctrl_set_branch
+mean_area_g_set_branch <- mean_area_ctrl_set_branch
+mean_area_p_set_branch <- mean_area_ctrl_set_branch
+
+ss_cum_ctrl_set_branch <- matrix(rep(NaN,(years+1)*5),ncol=(years+1),nrow=5)
+ss_cum_s_set_branch <- ss_cum_ctrl_set_branch
+ss_cum_g_set_branch <- ss_cum_ctrl_set_branch
+ss_cum_p_set_branch <- ss_cum_ctrl_set_branch
+
+
+# Simulate the progression of the size distribution, starting from the control case
+
+for(i in 1:years){
+  ss_ctrl_set_branch[,i+1] <- A_branch%*%ss_ctrl_set_branch[,i]
+  ss_ctrl_set_branch[,i+1] <- ss_ctrl_set_branch[,i+1] / sum(ss_ctrl_set_branch[,i+1])
+  
+  ss_s_set_branch[,i+1] <- A_red_s_branch%*%ss_s_set_branch[,i]
+  ss_s_set_branch[,i+1] <- ss_s_set_branch[,i+1] / sum(ss_s_set_branch[,i+1])
+  
+  ss_g_set_branch[,i+1] <- A_red_g_branch%*%ss_g_set_branch[,i]
+  ss_g_set_branch[,i+1] <- ss_g_set_branch[,i+1] / sum(ss_g_set_branch[,i+1])
+  
+  ss_p_set_branch[,i+1] <- A_red_p_branch%*%ss_p_set_branch[,i]
+  ss_p_set_branch[,i+1] <- ss_p_set_branch[,i+1] / sum(ss_p_set_branch[,i+1])
+  
+  
+  ss_cum_ctrl_set_branch[,i+1] <- cum.dens(ss_ctrl_set_branch[,i+1])
+  ss_cum_s_set_branch[,i+1] <- cum.dens(ss_s_set_branch[,i+1]) 
+  ss_cum_g_set_branch[,i+1] <- cum.dens(ss_g_set_branch[,i+1]) 
+  ss_cum_p_set_branch[,i+1] <- cum.dens(ss_p_set_branch[,i+1]) 
+  
+  mean_area_ctrl_set_branch[i+1] <- sum(ss_ctrl_set_branch[3:length(a_set_branch),i+1]/sum(ss_ctrl_set_branch[3:length(a_set_branch),i+1])*a_set_branch[3:length(a_set_branch)]) 
+  mean_area_s_set_branch[i+1] <- sum(ss_s_set_branch[3:length(a_set_branch),i+1]/sum(ss_s_set_branch[3:length(a_set_branch),i+1])*a_set_branch[3:length(a_set_branch)]) 
+  mean_area_g_set_branch[i+1] <- sum(ss_g_set_branch[3:length(a_set_branch),i+1]/sum(ss_g_set_branch[3:length(a_set_branch),i+1])*a_set_branch[3:length(a_set_branch)]) 
+  mean_area_p_set_branch[i+1] <- sum(ss_p_set_branch[3:length(a_set_branch),i+1]/sum(ss_p_set_branch[3:length(a_set_branch),i+1])*a_set_branch[3:length(a_set_branch)]) 
+  
+}
+
+
+
+
+numyears_set <- c(5,10) # the years that will be plotted
+
+par(mar=c(1,3,1,0),mfcol=c((2+length(numyears_set)),3))
+# altered survival
+barplot(ss_cum_branch_ctrl*100,las=1,ylim=c(0,100),col='black',main=paste('Lower survival; lambda = ',round(lambda_branch_red_s,4),sep=''))
+for(i in 1:length(numyears_set)){
+  barplot(ss_cum_s_set_branch[,numyears_set[i]]*100,las=1,ylim=c(0,100),col='black')
+}
+barplot(ss_cum_red_s_branch*100,las=1,ylim=c(0,100),col='black')
+
+
+# altered growth
+barplot(ss_cum_branch_ctrl*100,las=1,ylim=c(0,100),col='black',main=paste('Lower growth; lambda = ',round(lambda_branch_red_g,4),sep=''))
+for(i in 1:length(numyears_set)){
+  barplot(ss_cum_g_set_branch[,numyears_set[i]]*100,las=1,ylim=c(0,100),col='black')
+}
+barplot(ss_cum_red_g_branch*100,las=1,ylim=c(0,100),col='black')
+
+
+# altered fecundity
+barplot(ss_cum_branch_ctrl*100,las=1,ylim=c(0,100),col='black',main=paste('Lower fecundity; lambda = ',round(lambda_branch_red_p,4),sep=''))
+for(i in 1:length(numyears_set)){
+  barplot(ss_cum_p_set_branch[,numyears_set[i]]*100,las=1,ylim=c(0,100),col='black')
+}
+barplot(ss_cum_red_p_branch*100,las=1,ylim=c(0,100),col='black')
+
+
+```
+
+
+
+```{r}
+
+### Massive Corals ###
+## Control Case:
+# A_mass is the projection matrix
+# ss_mass_ctrl is the stable stage distribution
+# lambda_mass_ctrl is the leading eigenvalue
+# ss_cum_mass_ctrl is the 5-stage stage distribution
+
+## Reduced survivorship
+s_red_mass <- s_min_mass/8.99
+
+# Creating survival matrix for massive corals
+S <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass))
+S[2,2] <- s_R_mass # Survival of recruits
+for(i in 3:length(r_set_mass)){ # For all corals of detectable size
+  S[i,i] <- (s_max_mass-s_min_mass)*(1-exp(-b_mass*a_set_mass[i]))+s_min_mass-s_red_mass  # compute the appropriate survivorship
+}
+
+# Transition matrix A
+A_red_s_mass <- F_mass + (G_mass%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S
+A_red_s_mass[2,1] <- s_L_mass
+
+# Metrics
+lambda_mass_red_s <- Re(eigen(A_red_s_mass)$values[1])
+ss_red_s_mass <- Re(eigen(A_red_s_mass)$vectors[,1]); ss_red_s_mass <- ss_red_s_mass/sum(ss_red_s_mass)
+ss_cum_red_s_mass <- cum.dens(ss_red_s_mass) 
+
+
+## Reduced growth
+g_red_mass <- .3008
+
+# Creating growth matrix for massive corals
+growthrad <- r_set_mass + g_mass
+classgrowth <- NaN*classnum
+for(i in 2:length(r_set_mass)){ # Class number to which a coral grows
+  classgrowth[i] <- classnum[i]
+  for(j in 1:length(r_set_mass)){ if(r_set_mass[j]*.999<=growthrad[i]){classgrowth[i] <- classnum[j]}  } # 0.999 multiplier is there because of rounding errors that sometimes are too conservative.
+}
+
+G <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # Growth matrix
+for(i in 3:length(r_set_mass)){ # skip the larval and recruit stage
+  G[classgrowth[i],i] <- g_red_mass # probability of growing to the largest class 
+  # Then, divide up the remaining probability amongst the other classes
+  number.classes.poss <- classgrowth[i]-classnum[i]   # compute the number of classes you could grow in one step
+  if(number.classes.poss > 0){
+  prob.per.class <- (1-g_red_mass) / number.classes.poss # evenly distribute the probability of not achieving maximal growth amongst these classes
+  for(j in 1:number.classes.poss){G[i-1+j,i] <- prob.per.class}}}
+  if(number.classes.poss < 1){# If there's only one class to grow into, you move to it 100% of the time
+    G[classgrowth[i],i] <- 1  }
+G[3,2] <- g_rec_mass # All recruits grow at a fixed probability into a detectable size class
+G[2,2] <- 1 - g_rec_mass # Recruits that don't grow to the next size class stay behind as recruits
+
+# Transition matrix A
+A_red_g_mass <- F_mass + (G%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S_mass
+A_red_g_mass[2,1] <- s_L_mass
+
+# Metrics
+lambda_mass_red_g <- Re(eigen(A_red_g_mass)$values[1])
+ss_red_g_mass <- Re(eigen(A_red_g_mass)$vectors[,1]); ss_red_g_mass <- ss_red_g_mass/sum(ss_red_g_mass)
+ss_cum_red_g_mass <- cum.dens(ss_red_g_mass) 
+
+
+## Reduced fecundity
+p_red_mass <- p_mass/18.3
+
+# Creating fecundity matrix for massive corals
+F <- matrix(rep(0,length(r_set_mass)^2),nrow=length(r_set_mass),ncol=length(r_set_mass)) # fecundity matrix
+for(i in 1:length(r_set_mass)){
+  if(a_set_mass[i] > a_f_mass){ # if a coral in this size class is large enough to reproduce
+    F[1,i] <- a_set_mass[i]*p_red_mass
+  }
+}
+
+# Transition matrix A
+A_red_p_mass <- F + (G_mass%*%(diag(length(r_set_mass))-M_mass)+P_mass%*%M_mass)%*%S_mass
+A_red_p_mass[2,1] <- s_L_mass
+
+# Metrics
+lambda_mass_red_p <- Re(eigen(A_red_p_mass)$values[1])
+ss_red_p_mass <- Re(eigen(A_red_p_mass)$vectors[,1]); ss_red_p_mass <- ss_red_p_mass/sum(ss_red_p_mass)
+ss_cum_red_p_mass <- cum.dens(ss_red_p_mass) 
+
+
+
+# Simulate 100 years of time
+years <- 50
+ss_ctrl_set_mass <- matrix(rep(NaN,(years+1)*length(r_set_mass)),ncol=(years+1),nrow=length(r_set_mass))
+ss_ctrl_set_mass[,1] <- ss_mass_ctrl
+ss_s_set_mass <- ss_ctrl_set_mass
+ss_g_set_mass <- ss_ctrl_set_mass
+ss_p_set_mass <- ss_ctrl_set_mass
+
+mean_area_ctrl_set_mass <- rep(NaN,years+1)
+mean_area_ctrl_set_mass[1] <- sum(ss_mass_ctrl[3:length(ss_mass_ctrl)]/sum(ss_mass_ctrl[3:length(ss_mass_ctrl)])*a_set_mass[3:length(a_set_mass)]) 
+mean_area_s_set_mass <- mean_area_ctrl_set_mass
+mean_area_g_set_mass <- mean_area_ctrl_set_mass
+mean_area_p_set_mass <- mean_area_ctrl_set_mass
+
+ss_cum_ctrl_set_mass <- matrix(rep(NaN,(years+1)*5),ncol=(years+1),nrow=5)
+ss_cum_s_set_mass <- ss_cum_ctrl_set_mass
+ss_cum_g_set_mass <- ss_cum_ctrl_set_mass
+ss_cum_p_set_mass <- ss_cum_ctrl_set_mass
+
+
+# Simulate the progression of the size distribution, starting from the control case
+
+for(i in 1:years){
+  ss_ctrl_set_mass[,i+1] <- A_mass%*%ss_ctrl_set_mass[,i]
+  ss_ctrl_set_mass[,i+1] <- ss_ctrl_set_mass[,i+1] / sum(ss_ctrl_set_mass[,i+1])
+  
+  ss_s_set_mass[,i+1] <- A_red_s_mass%*%ss_s_set_mass[,i]
+  ss_s_set_mass[,i+1] <- ss_s_set_mass[,i+1] / sum(ss_s_set_mass[,i+1])
+  
+  ss_g_set_mass[,i+1] <- A_red_g_mass%*%ss_g_set_mass[,i]
+  ss_g_set_mass[,i+1] <- ss_g_set_mass[,i+1] / sum(ss_g_set_mass[,i+1])
+  
+  ss_p_set_mass[,i+1] <- A_red_p_mass%*%ss_p_set_mass[,i]
+  ss_p_set_mass[,i+1] <- ss_p_set_mass[,i+1] / sum(ss_p_set_mass[,i+1])
+  
+  
+  ss_cum_ctrl_set_mass[,i+1] <- cum.dens(ss_ctrl_set_mass[,i+1])
+  ss_cum_s_set_mass[,i+1] <- cum.dens(ss_s_set_mass[,i+1]) 
+  ss_cum_g_set_mass[,i+1] <- cum.dens(ss_g_set_mass[,i+1]) 
+  ss_cum_p_set_mass[,i+1] <- cum.dens(ss_p_set_mass[,i+1]) 
+  
+  mean_area_ctrl_set_mass[i+1] <- sum(ss_ctrl_set_mass[3:length(a_set_mass),i+1]/sum(ss_ctrl_set_mass[3:length(a_set_mass),i+1])*a_set_mass[3:length(a_set_mass)]) 
+  mean_area_s_set_mass[i+1] <- sum(ss_s_set_mass[3:length(a_set_mass),i+1]/sum(ss_s_set_mass[3:length(a_set_mass),i+1])*a_set_mass[3:length(a_set_mass)]) 
+  mean_area_g_set_mass[i+1] <- sum(ss_g_set_mass[3:length(a_set_mass),i+1]/sum(ss_g_set_mass[3:length(a_set_mass),i+1])*a_set_mass[3:length(a_set_mass)]) 
+  mean_area_p_set_mass[i+1] <- sum(ss_p_set_mass[3:length(a_set_mass),i+1]/sum(ss_p_set_mass[3:length(a_set_mass),i+1])*a_set_mass[3:length(a_set_mass)]) 
+  
+}
+
+
+
+
+numyears_set <- c(5,10) # the years that will be plotted
+
+par(mar=c(1,3,1,0),mfcol=c((2+length(numyears_set)),3))
+# altered survival
+barplot(ss_cum_mass_ctrl*100,las=1,ylim=c(0,100),col='black',main=paste('Lower survival; lambda = ',round(lambda_mass_red_s,4),sep=''))
+for(i in 1:length(numyears_set)){
+  barplot(ss_cum_s_set_mass[,numyears_set[i]]*100,las=1,ylim=c(0,100),col='black')
+}
+barplot(ss_cum_red_s_mass*100,las=1,ylim=c(0,100),col='black')
+
+
+# altered growth
+barplot(ss_cum_mass_ctrl*100,las=1,ylim=c(0,100),col='black',main=paste('Lower growth; lambda = ',round(lambda_mass_red_g,4),sep=''))
+for(i in 1:length(numyears_set)){
+  barplot(ss_cum_g_set_mass[,numyears_set[i]]*100,las=1,ylim=c(0,100),col='black')
+}
+barplot(ss_cum_red_g_mass*100,las=1,ylim=c(0,100),col='black')
+
+
+# altered fecundity
+barplot(ss_cum_mass_ctrl*100,las=1,ylim=c(0,100),col='black',main=paste('Lower fecundity; lambda = ',round(lambda_mass_red_p,4),sep=''))
+for(i in 1:length(numyears_set)){
+  barplot(ss_cum_p_set_mass[,numyears_set[i]]*100,las=1,ylim=c(0,100),col='black')
+}
+barplot(ss_cum_red_p_mass*100,las=1,ylim=c(0,100),col='black')
+
+```
+
+```{r fig3,fig.height=5,fig.width=4,fig.align='center'}
+
+par(mar=c(4,4,0.2,1),mfrow=c(2,1))
+plot(0:years,mean_area_s_set_branch,type='l',las=1,ylim=c(0,25000),xlab='', ylab= '')
+lines(0:years,mean_area_g_set_branch,type='l',lty=2)
+lines(0:years,mean_area_p_set_branch,type='l',lty=3)
+legend(x= 25, y = 20000, legend=c('Survival','Growth','Fecundity'),lty=c(1,2,3))
+
+plot(0:years,mean_area_s_set_mass,type='l',las=1,ylim=c(0,250),xlab='Time (years)', ylab= 'Mean Colony Area (cm2)')
+lines(0:years,mean_area_g_set_mass,type='l',lty=2)
+lines(0:years,mean_area_p_set_mass,type='l',lty=3)
+```
+
+
+
+Coral populations rapidly approach stable stage distributions when mortality is increased (left column), growth is reduced (middle column) or fecundity is reduced (right column). Top row: Initial distribution of colony sizes, given by the stable stage distribution of the 'control' matrix. Middle rows: Stage distributions expected five, ten, and twenty years after the demographic parameter has shifted. Bottom row: Stable stage distribution that will emerge given the new parameter. The speed at which the effect emerges depends upon the demographic rate which is impacted. 
+
+
+```{r}
+# Overlaying old and new histograms
+
+par(mar=c(1,3,1,0),mfcol=c(3,2))
+
+# BRANCHING CORALS
+# altered survival
+barplot(ss_cum_branch_ctrl*100,las=1,ylim=c(0,100),col=rgb(1,1,1,.1),main=paste('Lower survival; lambda = ',round(lambda_branch_red_s,4),sep=''))
+barplot(ss_cum_red_s_branch*100,las=1,ylim=c(0,100),col=rgb(0,0,0,.1),add=TRUE)
+
+
+# altered growth
+barplot(ss_cum_branch_ctrl*100,las=1,ylim=c(0,100),col=rgb(1,1,1,.1),main=paste('Lower growth; lambda = ',round(lambda_branch_red_g,4),sep=''))
+barplot(ss_cum_red_g_branch*100,las=1,ylim=c(0,100),col=rgb(0,0,0,.1),add=TRUE)
+
+
+# altered fecundity
+barplot(ss_cum_branch_ctrl*100,las=1,ylim=c(0,100),col=rgb(1,1,1,.1),main=paste('Lower fecundity; lambda = ',round(lambda_branch_red_p,4),sep=''))
+barplot(ss_cum_red_p_branch*100,las=1,ylim=c(0,100),col=rgb(0,0,0,.1),add=TRUE)
+
+
+
+# MASSIVE CORALS
+# altered survival
+barplot(ss_cum_mass_ctrl*100,las=1,ylim=c(0,100),col=rgb(1,1,1,.1),main=paste('Lower survival; lambda = ',round(lambda_mass_red_s,4),sep=''))
+barplot(ss_cum_red_s_mass*100,las=1,ylim=c(0,100),col=rgb(0,0,0,.1),add=TRUE)
+
+
+# altered growth
+barplot(ss_cum_mass_ctrl*100,las=1,ylim=c(0,100),col=rgb(1,1,1,.1),main=paste('Lower growth; lambda = ',round(lambda_mass_red_g,4),sep=''))
+barplot(ss_cum_red_g_mass*100,las=1,ylim=c(0,100),col=rgb(0,0,0,.1),add=TRUE)
+
+
+# altered fecundity
+barplot(ss_cum_mass_ctrl*100,las=1,ylim=c(0,100),col=rgb(1,1,1,.1),main=paste('Lower fecundity; lambda = ',round(lambda_mass_red_p,4),sep=''))
+barplot(ss_cum_red_p_mass*100,las=1,ylim=c(0,100),col=rgb(0,0,0,.1),add=TRUE)
+
+
+```
+
+
+
+
+
+
